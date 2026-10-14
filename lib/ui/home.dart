@@ -1,12 +1,11 @@
 
 import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
-
 import '../api.dart';
 import 'detalhes.dart';
+import 'formulario.dart';
 import 'style/colors.dart';
 
 class Home extends StatefulWidget {
@@ -17,71 +16,72 @@ class Home extends StatefulWidget {
 }
 
 class _HomeState extends State<Home> {
-  List<Map<String, dynamic>> receitas = [];
-  Set<int> favoritas = {};
+  List<dynamic> receitas = [];
+  List<String> favoritas = [];
+
   bool carregando = true;
-  String erro = '';
+  bool erro = false;
+  bool mostrarFavoritas = false;
+
   String pesquisa = '';
   String tipoSelecionado = 'TODAS';
-  bool mostrarFavoritas = false;
 
   @override
   void initState() {
     super.initState();
     carregarDados();
+    carregarFavoritas();
   }
 
   Future<void> carregarDados() async {
     setState(() {
       carregando = true;
-      erro = '';
+      erro = false;
     });
 
     try {
-      final resposta = await http
-          .get(Uri.parse(Api.getEndPoint('receitas')))
-          .timeout(const Duration(seconds: 20));
+      final resposta = await http.get(
+        Uri.parse(Api.getEndPoint('receitas')),
+      );
 
-      if (resposta.statusCode != 200) {
-        throw Exception('Não foi possível carregar as receitas.');
+      if (resposta.statusCode == 200) {
+        final dados = jsonDecode(resposta.body);
+
+        setState(() {
+          if (dados is List) {
+            receitas = dados;
+          } else if (dados is Map && dados['receitas'] is List) {
+            receitas = dados['receitas'];
+          } else {
+            receitas = [];
+          }
+
+          carregando = false;
+        });
+      } else {
+        setState(() {
+          erro = true;
+          carregando = false;
+        });
       }
-
-      final dados = jsonDecode(utf8.decode(resposta.bodyBytes));
-
-      if (dados is! List) {
-        throw Exception('A resposta da API está em um formato inesperado.');
-      }
-
-      final preferencias = await SharedPreferences.getInstance();
-      final idsSalvos = preferencias.getStringList('receitas_favoritas') ?? [];
-
-      if (!mounted) return;
-
-      setState(() {
-        receitas = dados
-            .map((item) => Map<String, dynamic>.from(item as Map))
-            .toList();
-
-        favoritas = idsSalvos
-            .map((id) => int.tryParse(id))
-            .whereType<int>()
-            .toSet();
-
-        carregando = false;
-      });
     } catch (e) {
-      if (!mounted) return;
-
       setState(() {
+        erro = true;
         carregando = false;
-        erro = 'Não foi possível carregar as receitas. '
-            'Verifique sua conexão e tente novamente.';
       });
     }
   }
 
-  Future<void> alternarFavorita(int id) async {
-    final preferencias = await SharedPreferences.getInstance();
+  Future<void> carregarFavoritas() async {
+    final prefs = await SharedPreferences.getInstance();
+
+    setState(() {
+      favoritas = prefs.getStringList('favoritas') ?? [];
+    });
+  }
+
+  Future<void> alterarFavorita(String id) async {
+    final prefs = await SharedPreferences.getInstance();
 
     setState(() {
       if (favoritas.contains(id)) {
@@ -91,72 +91,51 @@ class _HomeState extends State<Home> {
       }
     });
 
-    await preferencias.setStringList(
-      'receitas_favoritas',
-      favoritas.map((id) => id.toString()).toList(),
-    );
+    await prefs.setStringList('favoritas', favoritas);
   }
 
-  List<Map<String, dynamic>> get receitasFiltradas {
+  Future<void> abrirFormulario() async {
+    final resultado = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (context) => const Formulario(),
+      ),
+    );
+
+    if (resultado == true) {
+      carregarDados();
+    }
+  }
+
+  Future<void> abrirDetalhes(Map<String, dynamic> receita) async {
+    final resultado = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (context) => Detalhes(receita: receita),
+      ),
+    );
+
+    if (resultado == true) {
+      carregarDados();
+    }
+  }
+
+  List<dynamic> get receitasFiltradas {
     return receitas.where((receita) {
-      final nome = (receita['nome'] ?? '').toString().toLowerCase();
+      final nome = receita['nome']?.toString().toLowerCase() ?? '';
+      final tipo = receita['tipo']?.toString().toUpperCase() ?? '';
+      final id = receita['id']?.toString() ?? '';
+
       final combinaPesquisa = nome.contains(pesquisa.toLowerCase());
 
-      final tipo = (receita['tipo'] ?? '').toString().toUpperCase();
-      final combinaTipo =
-          tipoSelecionado == 'TODAS' || tipo == tipoSelecionado;
+      final combinaTipo = tipoSelecionado == 'TODAS' ||
+          tipo == tipoSelecionado;
 
-      final id = int.tryParse('${receita['id']}') ?? -1;
-      final combinaFavorita =
+      final combinaFavoritas =
           !mostrarFavoritas || favoritas.contains(id);
 
-      return combinaPesquisa && combinaTipo && combinaFavorita;
+      return combinaPesquisa && combinaTipo && combinaFavoritas;
     }).toList();
-  }
-
-  String nomeTipo(String tipo) {
-    switch (tipo.toUpperCase()) {
-      case 'DOCE':
-        return 'Doces';
-      case 'SALGADA':
-        return 'Salgadas';
-      case 'BEBIDA':
-        return 'Bebidas';
-      default:
-        return tipo;
-    }
-  }
-
-  Widget imagemReceita(String? url) {
-    if (url == null || url.trim().isEmpty) {
-      return Container(
-        color: AppColors.c4.withValues(alpha: 0.25),
-        child: const Center(
-          child: Icon(
-            Icons.restaurant,
-            size: 48,
-            color: AppColors.c2,
-          ),
-        ),
-      );
-    }
-
-    return Image.network(
-      url,
-      fit: BoxFit.cover,
-      errorBuilder: (context, error, stackTrace) {
-        return Container(
-          color: AppColors.c4.withValues(alpha: 0.25),
-          child: const Center(
-            child: Icon(
-              Icons.restaurant,
-              size: 48,
-              color: AppColors.c2,
-            ),
-          ),
-        );
-      },
-    );
   }
 
   @override
@@ -168,6 +147,17 @@ class _HomeState extends State<Home> {
         title: const Text('Livro de Receitas'),
         actions: [
           IconButton(
+            tooltip: 'Mostrar favoritas',
+            onPressed: () {
+              setState(() {
+                mostrarFavoritas = !mostrarFavoritas;
+              });
+            },
+            icon: Icon(
+              mostrarFavoritas ? Icons.favorite : Icons.favorite_border,
+            ),
+          ),
+          IconButton(
             tooltip: 'Atualizar receitas',
             onPressed: carregarDados,
             icon: const Icon(Icons.refresh),
@@ -177,27 +167,28 @@ class _HomeState extends State<Home> {
       body: Column(
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 18, 16, 10),
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
             child: TextField(
+              decoration: InputDecoration(
+                hintText: 'Pesquisar receita...',
+                prefixIcon: const Icon(Icons.search),
+                filled: true,
+                fillColor: Colors.white,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: BorderSide.none,
+                ),
+              ),
               onChanged: (valor) {
                 setState(() {
                   pesquisa = valor;
                 });
               },
-              decoration: InputDecoration(
-                hintText: 'Buscar uma receita...',
-                prefixIcon: const Icon(Icons.search),
-                filled: true,
-                fillColor: Colors.white,
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(16),
-                  borderSide: BorderSide.none,
-                ),
-              ),
             ),
           ),
+
           SizedBox(
-            height: 48,
+            height: 55,
             child: ListView(
               scrollDirection: Axis.horizontal,
               padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -209,192 +200,218 @@ class _HomeState extends State<Home> {
               ],
             ),
           ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: FilterChip(
-                selected: mostrarFavoritas,
-                avatar: const Icon(Icons.favorite, size: 18),
-                label: const Text('Somente favoritas'),
-                onSelected: (valor) {
-                  setState(() {
-                    mostrarFavoritas = valor;
-                  });
-                },
-              ),
-            ),
-          ),
+
           Expanded(
-            child: Builder(
-              builder: (context) {
-                if (carregando) {
-                  return const Center(
+            child: carregando
+                ? const Center(
                     child: CircularProgressIndicator(),
-                  );
-                }
-
-                if (erro.isNotEmpty) {
-                  return Center(
-                    child: Padding(
-                      padding: const EdgeInsets.all(24),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(
-                            Icons.wifi_off,
-                            size: 48,
-                            color: AppColors.c2,
-                          ),
-                          const SizedBox(height: 12),
-                          Text(
-                            erro,
-                            textAlign: TextAlign.center,
-                          ),
-                          const SizedBox(height: 12),
-                          ElevatedButton.icon(
-                            onPressed: carregarDados,
-                            icon: const Icon(Icons.refresh),
-                            label: const Text('Tentar novamente'),
-                          ),
-                        ],
-                      ),
-                    ),
-                  );
-                }
-
-                if (lista.isEmpty) {
-                  return const Center(
-                    child: Text('Nenhuma receita encontrada.'),
-                  );
-                }
-
-                return RefreshIndicator(
-                  onRefresh: carregarDados,
-                  child: ListView.builder(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-                    itemCount: lista.length,
-                    itemBuilder: (context, index) {
-                      final receita = lista[index];
-                      final id = int.tryParse('${receita['id']}') ?? -1;
-                      final tipo = (receita['tipo'] ?? '').toString();
-                      final imagem = receita['img']?.toString();
-                      final nome =
-                          receita['nome']?.toString() ?? 'Sem nome';
-
-                      return Card(
-                        margin: const EdgeInsets.only(bottom: 16),
-                        clipBehavior: Clip.antiAlias,
-                        color: Colors.white,
-                        elevation: 3,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(18),
-                        ),
-                        child: InkWell(
-                          onTap: () {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (context) => Detalhes(
-                                  receita: receita,
-                                ),
-                              ),
-                            );
-                          },
+                  )
+                : erro
+                    ? Center(
+                        child: Padding(
+                          padding: const EdgeInsets.all(24),
                           child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisAlignment: MainAxisAlignment.center,
                             children: [
-                              SizedBox(
-                                height: 190,
-                                width: double.infinity,
-                                child: Stack(
-                                  fit: StackFit.expand,
-                                  children: [
-                                    imagemReceita(imagem),
-                                    Positioned(
-                                      top: 10,
-                                      right: 10,
-                                      child: CircleAvatar(
-                                        backgroundColor: Colors.white,
-                                        child: IconButton(
-                                          tooltip: 'Favoritar',
-                                          onPressed: () =>
-                                              alternarFavorita(id),
-                                          icon: Icon(
-                                            favoritas.contains(id)
-                                                ? Icons.favorite
-                                                : Icons.favorite_border,
-                                            color: favoritas.contains(id)
-                                                ? Colors.red
-                                                : AppColors.c1,
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
+                              const Icon(
+                                Icons.wifi_off,
+                                size: 55,
+                                color: AppColors.c2,
                               ),
-                              Padding(
-                                padding: const EdgeInsets.all(14),
-                                child: Column(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      nome,
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .titleLarge,
-                                    ),
-                                    const SizedBox(height: 6),
-                                    Row(
-                                      children: [
-                                        const Icon(
-                                          Icons.restaurant_menu,
-                                          size: 17,
-                                          color: AppColors.c2,
-                                        ),
-                                        const SizedBox(width: 6),
-                                        Text(nomeTipo(tipo)),
-                                        const Spacer(),
-                                        const Text(
-                                          'Ver receita  →',
-                                          style: TextStyle(
-                                            color: AppColors.c1,
-                                            fontWeight: FontWeight.bold,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ],
-                                ),
+                              const SizedBox(height: 12),
+                              const Text(
+                                'Não foi possível carregar as receitas.',
+                                textAlign: TextAlign.center,
+                              ),
+                              const SizedBox(height: 12),
+                              ElevatedButton.icon(
+                                onPressed: carregarDados,
+                                icon: const Icon(Icons.refresh),
+                                label: const Text('Tentar novamente'),
                               ),
                             ],
                           ),
                         ),
-                      );
-                    },
-                  ),
-                );
-              },
-            ),
+                      )
+                    : lista.isEmpty
+                        ? Center(
+                            child: Padding(
+                              padding: const EdgeInsets.all(24),
+                              child: Text(
+                                mostrarFavoritas
+                                    ? 'Você ainda não tem receitas favoritas.'
+                                    : 'Nenhuma receita encontrada.',
+                                textAlign: TextAlign.center,
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .titleLarge,
+                              ),
+                            ),
+                          )
+                        : RefreshIndicator(
+                            onRefresh: carregarDados,
+                            child: ListView.builder(
+                              padding: const EdgeInsets.fromLTRB(
+                                16,
+                                8,
+                                16,
+                                90,
+                              ),
+                              itemCount: lista.length,
+                              itemBuilder: (context, index) {
+                                final receita =
+                                    Map<String, dynamic>.from(lista[index]);
+
+                                final nome =
+                                    receita['nome']?.toString() ?? 'Receita';
+                                final tipo =
+                                    receita['tipo']?.toString() ?? '';
+                                final imagem =
+                                    receita['img']?.toString();
+                                final id =
+                                    receita['id']?.toString() ?? '';
+
+                                final favorita = favoritas.contains(id);
+
+                                return Card(
+                                  color: Colors.white,
+                                  margin: const EdgeInsets.only(bottom: 14),
+                                  elevation: 3,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(16),
+                                  ),
+                                  clipBehavior: Clip.antiAlias,
+                                  child: InkWell(
+                                    onTap: () => abrirDetalhes(receita),
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        if (imagem != null &&
+                                            imagem.trim().isNotEmpty)
+                                          Image.network(
+                                            imagem,
+                                            width: double.infinity,
+                                            height: 170,
+                                            fit: BoxFit.cover,
+                                            errorBuilder: (
+                                              context,
+                                              error,
+                                              stackTrace,
+                                            ) {
+                                              return imagemIndisponivel();
+                                            },
+                                          )
+                                        else
+                                          imagemIndisponivel(),
+
+                                        Padding(
+                                          padding: const EdgeInsets.fromLTRB(
+                                            16,
+                                            12,
+                                            8,
+                                            12,
+                                          ),
+                                          child: Row(
+                                            children: [
+                                              Expanded(
+                                                child: Column(
+                                                  crossAxisAlignment:
+                                                      CrossAxisAlignment.start,
+                                                  children: [
+                                                    Text(
+                                                      nome,
+                                                      style: Theme.of(context)
+                                                          .textTheme
+                                                          .titleLarge,
+                                                    ),
+                                                    const SizedBox(height: 6),
+                                                    Chip(
+                                                      label: Text(tipo),
+                                                      avatar: const Icon(
+                                                        Icons.restaurant_menu,
+                                                        size: 18,
+                                                      ),
+                                                      backgroundColor:
+                                                          AppColors.c4
+                                                              .withValues(
+                                                        alpha: 0.25,
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                              IconButton(
+                                                tooltip: favorita
+                                                    ? 'Remover dos favoritos'
+                                                    : 'Adicionar aos favoritos',
+                                                onPressed: () {
+                                                  alterarFavorita(id);
+                                                },
+                                                icon: Icon(
+                                                  favorita
+                                                      ? Icons.favorite
+                                                      : Icons.favorite_border,
+                                                  color: favorita
+                                                      ? Colors.red
+                                                      : AppColors.c1,
+                                                  size: 28,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
           ),
         ],
+      ),
+
+      floatingActionButton: FloatingActionButton(
+        onPressed: abrirFormulario,
+        tooltip: 'Adicionar receita',
+        child: const Icon(Icons.add),
       ),
     );
   }
 
-  Widget filtroTipo(String valor, String titulo) {
+  Widget filtroTipo(String tipo, String texto) {
+    final selecionado = tipoSelecionado == tipo;
+
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
       child: ChoiceChip(
-        label: Text(titulo),
-        selected: tipoSelecionado == valor,
+        label: Text(texto),
+        selected: selecionado,
+        selectedColor: AppColors.c1,
+        backgroundColor: Colors.white,
+        labelStyle: TextStyle(
+          color: selecionado ? Colors.white : AppColors.c1,
+          fontWeight: FontWeight.bold,
+        ),
         onSelected: (selecionado) {
           setState(() {
-            tipoSelecionado = valor;
+            tipoSelecionado = tipo;
           });
         },
+      ),
+    );
+  }
+
+  Widget imagemIndisponivel() {
+    return Container(
+      width: double.infinity,
+      height: 170,
+      color: AppColors.c4.withValues(alpha: 0.25),
+      child: const Icon(
+        Icons.restaurant,
+        size: 60,
+        color: AppColors.c2,
       ),
     );
   }

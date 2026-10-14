@@ -1,5 +1,9 @@
 
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import '../api.dart';
+import 'formulario.dart';
 import 'style/colors.dart';
 
 class Detalhes extends StatelessWidget {
@@ -9,6 +13,57 @@ class Detalhes extends StatelessWidget {
     super.key,
     required this.receita,
   });
+
+  Future<void> excluirReceita(BuildContext context) async {
+    final confirmar = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Excluir receita'),
+        content: const Text('Deseja realmente excluir esta receita?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancelar'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Excluir'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmar != true || !context.mounted) return;
+
+    try {
+      final resposta = await http.delete(
+        Uri.parse(Api.getEndPoint('receitas/${receita['id']}')),
+      );
+
+      if (!context.mounted) return;
+
+      if (resposta.statusCode >= 200 && resposta.statusCode < 300) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Receita excluída!')),
+        );
+        Navigator.pop(context, true);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Não foi possível excluir. Erro ${resposta.statusCode}.',
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      if (!context.mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Erro de conexão com a API.')),
+      );
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -22,6 +77,7 @@ class Detalhes extends StatelessWidget {
     final custo = receita['custoAproximado'];
 
     String? custoFormatado;
+
     if (custo is num) {
       custoFormatado = custo.toStringAsFixed(2).replaceAll('.', ',');
     } else if (custo != null) {
@@ -34,6 +90,29 @@ class Detalhes extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         title: Text(nome),
+        actions: [
+          IconButton(
+            tooltip: 'Editar receita',
+            icon: const Icon(Icons.edit),
+            onPressed: () async {
+              final resultado = await Navigator.push<bool>(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => Formulario(receita: receita),
+                ),
+              );
+
+              if (resultado == true && context.mounted) {
+                Navigator.pop(context, true);
+              }
+            },
+          ),
+          IconButton(
+            tooltip: 'Excluir receita',
+            icon: const Icon(Icons.delete),
+            onPressed: () => excluirReceita(context),
+          ),
+        ],
       ),
       body: SingleChildScrollView(
         child: Column(
